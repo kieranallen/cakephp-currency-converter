@@ -6,6 +6,7 @@ use Cake\Controller\Component;
 use Cake\Datasource\ConnectionManager;
 use Cake\ORM\TableRegistry;
 use Cake\Database\Schema\TableSchema;
+use Cake\i18n\Time;
 
 class CurrencyConverterComponent extends Component
 {
@@ -37,11 +38,11 @@ class CurrencyConverterComponent extends Component
      * @return float the total amount converted into the new currency
      */
     public function convert(
-        $fromCurrency, 
-        $toCurrency, 
-        $amount, 
-        $saveIntoDb = true, 
-        $hourDifference = 1, 
+        $fromCurrency,
+        $toCurrency,
+        $amount,
+        $saveIntoDb = true,
+        $hourDifference = 1,
         $dataSource = 'default'
     ) {
         $this->fromCurrency = $fromCurrency;
@@ -52,26 +53,24 @@ class CurrencyConverterComponent extends Component
         $this->dataSource = $dataSource;
         $this->rate = 0;
 
-        if ($this->fromCurrency != $this->toCurrency) {
-            $this->fixFromToCurrency();
-            
-            if ($this->saveIntoDb === true) {
-                $this->currencyTable = TableRegistry::get('CurrencyConverter', [
-                    'className' => 'CurrencyConverter\Model\Table\CurrencyConvertersTable',
-                    'table' => 'currency_converter'
-                ]);
+        $this->fixFromToCurrency();
 
-                $this->ensureIfExistTable();
-                $this->saveIntoDatabase();
+        if ($this->saveIntoDb === true) {
+            $this->currencyTable = TableRegistry::get('CurrencyConverter', [
+                'className' => 'CurrencyConverter\Model\Table\CurrencyConvertersTable',
+                'table' => 'currency_converter'
+            ]);
 
-                return $this->calculateValue();
-            }
-            
-            $this->rate = $this->getRates();
+            $this->ensureIfExistTable();
+            $this->saveIntoDatabase();
 
             return $this->calculateValue();
         }
-        
+
+        $this->rate = $this->getRates();
+
+        return $this->calculateValue();
+
         return number_format((double)$this->amount, 2, '.', '');
     }
 
@@ -116,15 +115,16 @@ class CurrencyConverterComponent extends Component
     private function updateDatabase($row)
     {
         $this->rate = $this->getRates();
+        $now = new Time('now');
 
         $data = [
             'fromCurrency'=> $this->fromCurrency,
             'toCurrency'  => $this->toCurrency,
             'rates'       => $this->rate,
-            'modified'    => date('Y-m-d H:i:s'),
+            'modified'    => $now,
         ];
 
-        $entity = $this->currencyTable->get($row['id']); 
+        $entity = $this->currencyTable->get($row['id']);
         $this->currencyTable->patchEntity($entity, $data);
         $this->currencyTable->save($entity);
     }
@@ -132,13 +132,14 @@ class CurrencyConverterComponent extends Component
     private function insertIntoDatabase()
     {
         $this->rate = $this->getRates();
+        $now = new Time('now');
 
         $data = [
             'fromCurrency' => $this->fromCurrency,
             'toCurrency'   => $this->toCurrency,
             'rates'        => $this->rate,
-            'created'      => date('Y-m-d H:i:s'),
-            'modified'     => date('Y-m-d H:i:s'),
+            'created'      => $now,
+            'modified'     => $now,
         ];
 
         $entity = $this->currencyTable->newEntity($data);
@@ -148,33 +149,33 @@ class CurrencyConverterComponent extends Component
     private function ensureNeedToUpdateDatabase($diff, $row)
     {
         return (
-            ((int)$diff->y >= 1) || 
-            ((int)$diff->m >= 1) || 
-            ((int)$diff->d >= 1) || 
-            ((int)$diff->h >= $this->hourDifference) || 
+            ((int)$diff->y >= 1) ||
+            ((int)$diff->m >= 1) ||
+            ((int)$diff->d >= 1) ||
+            ((int)$diff->h >= $this->hourDifference) ||
             ((double)$row['rates'] == 0)
         );
     }
 
     private function getRates()
     {
-        $url = 'http://api.fixer.io/latest?base=' . $this->fromCurrency . '&symbols=' . $this->toCurrency;
+        if ($this->fromCurrency == $this->toCurrency) {
+            return 1;
+        } else {
+            $url = 'http://api.fixer.io/latest?symbols=' . $this->toCurrency .'&base='.$this->fromCurrency;
 
-        $handle = @fopen($url, 'r');
+            $handle = file_get_contents($url);
 
-        if ($handle) {
-            $result = fgets($handle, 4096);
-            fclose($handle);
-        }
+            if ($handle) {
+                $result = json_decode($handle, true);
+            }
 
-        if (isset($result)) {
-            $conversion = json_decode($result, true);
-
-            if (isset($conversion['rates'][$this->toCurrency])) {
-                return $conversion['rates'][$this->toCurrency];
+            if(isset($result)){
+                $rates = $result['rates'];
+                return floatval(reset($rates));
             }
         }
-        
+
         return $this->rate = 0;
     }
 
@@ -185,7 +186,7 @@ class CurrencyConverterComponent extends Component
         $db = ConnectionManager::get($this->dataSource);
         $config = $db->config();
 
-        if (strpos($config['dsn'], 'sqlite') !== false) {
+        if (strpos($config['driver'], 'Sqlite') !== false) {
             $autoIncrement = 'AUTOINCREMENT';
         }
 
